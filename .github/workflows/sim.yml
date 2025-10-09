@@ -1,41 +1,25 @@
-name: Simulate & Update Tesla Stock
-
+name: Simulate and Update Tesla Stock
 on:
-  schedule:
-    # 23:00 UTC = 06:00 ICT (UTC+7)
-    - cron: '0 23 * * *'
   workflow_dispatch:
+  schedule:
+    - cron: "0 23 * * *"
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
+          python-version: "3.11"
       - name: Install deps
         run: pip install requests
-
-      - name: Preflight: check UB guild access
-        env:
-          UNB_TOKEN: ${{ secrets.UNB_TOKEN }}
-        run: |
-          set -e
-          echo "Checking app visibility on the guild…"
-          curl -sS -H "Authorization: $UNB_TOKEN" \
-            https://unbelievaboat.com/api/v1/applications/@me/guilds/1219525577950888036 \
-            | python -m json.tool
-
-      - name: Simulate, publish, and PATCH UnbelievaBoat
+      - name: Simulate and Patch
         env:
           UNB_TOKEN: ${{ secrets.UNB_TOKEN }}
         run: python scripts/sim_and_update.py
-
-      - name: Commit updated site files
+      - name: Commit site files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
