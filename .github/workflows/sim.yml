@@ -1,0 +1,34 @@
+name: Simulate & Update Tesla Stock
+
+on:
+  schedule:
+    # 23:00 UTC = 06:00 ICT (UTC+7)
+    - cron: "0 23 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install requests
+
+      - name: Simulate, publish, and PATCH UnbelievaBoat
+        env:
+          UNB_TOKEN: ${{ secrets.UNB_TOKEN }}
+        run: python scripts/sim_and_update.py
+
+      - name: Commit updated site files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/tesla_history.json docs/index.html
+          git commit -m "Daily update" || echo "No changes"
+          git push
