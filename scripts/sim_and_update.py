@@ -34,7 +34,7 @@ INDEX_PATH   = pathlib.Path("docs/index.html")
 START_PRICE = 1000.0
 DRIFT       = 0.0002   # ~+0.02% avg/day (small upward bias)
 VOL         = 0.03     # ~3% daily vol
-MIN_PRICE   = 1
+MIN_PRICE   = 500
 
 # Mean reversion
 ANCHOR   = 1000.0      # long-run "fair value" (can drift over time if you want)
