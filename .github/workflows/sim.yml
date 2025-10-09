@@ -19,6 +19,15 @@ jobs:
 
       - name: Install deps
         run: pip install requests
+        
+      - name: Preflight: check UB guild access
+        env:
+          UNB_TOKEN: ${{ secrets.UNB_TOKEN }}
+        run: |
+          set -e
+          echo "Check app visibility on the guild…"
+          curl -sS -H "Authorization: $UNB_TOKEN" \
+            https://unbelievaboat.com/api/v1/applications/@me/guilds/1219525577950888036 | jq .
 
       - name: Simulate, publish, and PATCH UnbelievaBoat
         env:
