@@ -4,7 +4,7 @@ on:
   schedule:
     # 23:00 UTC = 06:00 ICT (UTC+7)
     - cron: '0 23 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 jobs:
   run:
@@ -20,7 +20,6 @@ jobs:
       - name: Install deps
         run: pip install requests
 
-      # Optional debug step — keeps or removes as you like
       - name: Preflight: check UB guild access
         env:
           UNB_TOKEN: ${{ secrets.UNB_TOKEN }}
