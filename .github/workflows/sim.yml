@@ -3,18 +3,20 @@ name: Simulate and Update Tesla Stock
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 23 * * *"   # 23:00 UTC = 06:00 ICT
+    - cron: "0 23 * * *"   # 23:00 UTC = 11:00 PM UTC daily
 
 permissions:
-  contents: write   # <-- required for git push
+  contents: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          persist-credentials: true   # default, keeps GITHUB_TOKEN for push
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -24,18 +26,25 @@ jobs:
       - name: Install deps
         run: pip install requests
 
-      - name: Simulate and Patch
+      - name: Simulate / publish / patch UB
         env:
           UNB_TOKEN: ${{ secrets.UNB_TOKEN }}
+          # Optional overrides (uncomment to customize without code edits):
+          # UNB_GUILD_ID: "1219525577950888036"
+          # UNB_ITEM_NAME: "Tesla Stock"
+          # UNB_ITEM_ID: "YOUR_ITEM_ID"     # skip name lookup if set
+          # PAGES_URL: "https://vesstra.github.io/discord-tesla-stock-sim/"
         run: python scripts/sim_and_update.py
 
-      - name: Commit site files (only if changed)
+      - name: Commit site & meta files (only if changed)
         run: |
           set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Public site files
           git add docs/tesla_history.json docs/index.html || true
-          # If nothing is staged, skip commit+push
+          # Private meta (not served by Pages)
+          git add .data/tesla_meta.json || true
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
