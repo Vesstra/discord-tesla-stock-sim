@@ -1,0 +1,11 @@
+{
+  "symbol": "TSLA",
+  "name": "Tesla Stock",
+  "unit": "chips",
+  "history": [
+    {
+      "date": "2025-10-09",
+      "price": 1000
+    }
+  ]
+}
