@@ -23,7 +23,7 @@ INDEX_PATH   = pathlib.Path("docs/index.html")           # public page
 META_PATH    = pathlib.Path(".data/tesla_meta.json")     # private (shock/bear)
 
 # Base model
-START_PRICE = 1000.0
+START_PRICE = 10000.0
 DRIFT       = 0.0002
 VOL         = 0.03
 MIN_PRICE   = 1
