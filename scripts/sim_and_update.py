@@ -29,7 +29,7 @@ VOL         = 0.03
 MIN_PRICE   = 1
 
 # Mean reversion
-ANCHOR   = 1000.0
+ANCHOR   = 15000.0
 REVERT_K = 0.12
 
 # Shocks
