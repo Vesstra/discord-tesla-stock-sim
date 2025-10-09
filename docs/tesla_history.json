@@ -125,6 +125,7 @@
     }
   ],
   "meta": {
-    "next_shock_in": 4
+    "next_shock_in": 3,
+    "bear_left": 0
   }
 }
