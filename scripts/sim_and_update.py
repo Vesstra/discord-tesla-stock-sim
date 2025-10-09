@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
-Simulate a daily price for a Discord "stock" and update the UnbelievaBoat
-store item price + description. Maintains JSON history + a Chart.js page.
+Stocks sim with:
+- Mean reversion to an anchor (punishes bubbles)
+- Random shock/spike days every few days (down-biased)
+- Bear regimes (temporary higher vol + negative drift)
+- Weekly decay/rebase (holding cost)
+- JSON-persisted meta so behavior carries across days
+- Patches UnbelievaBoat store item price/description
+- Maintains Chart.js page + JSON under docs/
 
-Now with SHOCK DAYS:
-- A countdown (stored in JSON) triggers a shock every few days.
-- After each shock, the next interval is drawn randomly from one of two ranges.
-
-Env vars:
-  UNB_TOKEN     (required)  — UnbelievaBoat Application Token
-  UNB_GUILD_ID  (optional)  — defaults to 1219525577950888036
-  UNB_ITEM_NAME (optional)  — defaults to "Tesla Stock"
-  UNB_ITEM_ID   (optional)  — if set, skip lookup by name
-  PAGES_URL     (optional)  — defaults to https://vesstra.github.io/discord-tesla-stock-sim/
+Env:
+  UNB_TOKEN      (required)  — UnbelievaBoat Application Token
+  UNB_GUILD_ID   (optional)  — defaults to 1219525577950888036
+  UNB_ITEM_NAME  (optional)  — defaults to "Tesla Stock"
+  UNB_ITEM_ID    (optional)  — if set, skip name lookup
+  PAGES_URL      (optional)  — defaults to https://vesstra.github.io/discord-tesla-stock-sim/
 """
 
 import os, json, math, random, datetime, requests, pathlib, sys
 from typing import Any, Dict, List, Tuple
 
-# ------------------ Configuration ------------------
+# ------------------ Required / Defaults ------------------
 UNB_TOKEN   = os.environ.get("UNB_TOKEN")  # MUST be set in Actions secrets
 GUILD_ID    = os.environ.get("UNB_GUILD_ID", "1219525577950888036")
 ITEM_NAME   = os.environ.get("UNB_ITEM_NAME", "Tesla Stock")
@@ -28,26 +30,37 @@ PAGES_URL   = os.environ.get("PAGES_URL", "https://vesstra.github.io/discord-tes
 HISTORY_PATH = pathlib.Path("docs/tesla_history.json")
 INDEX_PATH   = pathlib.Path("docs/index.html")
 
-# Base (non-shock) price model: geometric Brownian motion
+# ------------------ Base model (calmer daily) ------------------
 START_PRICE = 1000.0
-DRIFT       = 0.0005     # ~+0.05% avg daily drift
-VOL         = 0.03       # ~3% daily volatility
+DRIFT       = 0.0002   # ~+0.02% avg/day (small upward bias)
+VOL         = 0.03     # ~3% daily vol
 MIN_PRICE   = 1
 
-# First-run chart backfill
-BACKFILL_DAYS = 30
+# Mean reversion
+ANCHOR   = 1000.0      # long-run "fair value" (can drift over time if you want)
+REVERT_K = 0.12        # pull strength: 0.05–0.20 is typical
 
-# -------- Shock configuration --------
-# After each shock, we randomly choose the next interval from ONE of these ranges:
-SHOCK_INTERVAL_RANGES: List[Tuple[int, int]] = [(2, 3), (4, 5)]  # your 2–3 OR 4–5 days
-# Size of a shock (percent of price, absolute value). Actual sign is random ±1.
-SHOCK_PCT_MIN = 0.06   # 6%
-SHOCK_PCT_MAX = 0.15   # 15%
-# Bias toward up or down on shocks (0.5 = fair coin)
-SHOCK_UP_PROB = 0.5
-# -------------------------------------
+# ------------------ Shocks (discourage "just hold") ------------------
+# Shock every few days: pick one of the ranges randomly each time
+SHOCK_INTERVAL_RANGES: List[Tuple[int, int]] = [(2, 3), (4, 5)]
+SHOCK_PCT_MIN = 0.10   # 10%
+SHOCK_PCT_MAX = 0.25   # 25%
+SHOCK_UP_PROB = 0.35   # 35% up / 65% down (down bias)
 
-# ----------------------------------------------------
+# ------------------ Bear regimes ------------------
+BEAR_PROB  = 0.15           # chance to enter bear on any day (when not already in one)
+BEAR_DAYS  = (2, 5)         # length range (inclusive)
+BEAR_DRIFT = -0.002         # -0.2%/day during bear
+BEAR_VOL   = 0.05           # 5% daily vol during bear
+
+# ------------------ Weekly decay / rebase ------------------
+REBASE_DAY = 6              # Sunday (Mon=0 .. Sun=6)
+REBASE_PCT = 0.01           # 1% weekly holding cost
+
+# ------------------ Backfill on first run ------------------
+BACKFILL_DAYS = 30          # seed more days so chart draws a line immediately
+
+# -----------------------------------------------------------
 
 def die(msg: str, extra: str = "") -> None:
     print(f"[ERROR] {msg}")
@@ -63,9 +76,10 @@ def ensure_site_files() -> None:
             "name": ITEM_NAME,
             "unit": "chips",
             "meta": {
-                "next_shock_in": None  # set on first run
+                "next_shock_in": None,
+                "bear_left": 0
             },
-            "history": []  # we’ll backfill below
+            "history": []
         }, indent=2), encoding="utf-8")
 
     if not INDEX_PATH.exists():
@@ -129,56 +143,57 @@ def save_history(obj: Dict[str, Any]) -> None:
     except Exception as e:
         die("Failed to write docs/tesla_history.json", str(e))
 
-def simulate_step(prev_price: float) -> int:
-    """One non-shock day using GBM."""
-    z = random.gauss(0, 1)
-    step = math.exp((DRIFT - 0.5 * VOL * VOL) + VOL * z)
-    price = max(MIN_PRICE, round(prev_price * step))
-    return int(price)
-
 def draw_next_interval() -> int:
-    """Pick one of the ranges at random, then pick an integer day count within it."""
     lo, hi = random.choice(SHOCK_INTERVAL_RANGES)
     return random.randint(lo, hi)
 
-def apply_shock(price: int) -> Tuple[int, float, int]:
-    """
-    Apply a shock of ±X% where X is uniform in [SHOCK_PCT_MIN, SHOCK_PCT_MAX].
-    Returns: (new_price, pct_signed, sign) where sign is +1 or -1.
-    """
-    pct = random.uniform(SHOCK_PCT_MIN, SHOCK_PCT_MAX)
-    sign = +1 if random.random() < SHOCK_UP_PROB else -1
-    new_price = int(max(MIN_PRICE, round(price * (1.0 + sign * pct))))
-    return new_price, (sign * pct), sign
-
 def backfill_history(data: Dict[str, Any]) -> None:
-    """If <2 points exist, generate BACKFILL_DAYS so the chart has a line."""
     hist: List[Dict[str, Any]] = data.get("history", [])
-    meta = data.setdefault("meta", {})
+    meta = data.setdefault("meta", {"next_shock_in": None, "bear_left": 0})
     if len(hist) >= 2:
         if meta.get("next_shock_in") is None:
             meta["next_shock_in"] = draw_next_interval()
+        if "bear_left" not in meta:
+            meta["bear_left"] = 0
         return
 
     today = datetime.date.today()
-    points: List[Dict[str, Any]] = []
-    price = int(round(START_PRICE))
     start_date = today - datetime.timedelta(days=BACKFILL_DAYS - 1)
     d = start_date
+    price = int(round(START_PRICE))
 
-    # Deterministic backfill for a nice looking first curve
+    # deterministic backfill for a nice initial curve
     state = random.getstate()
     random.seed(42)
+    points: List[Dict[str, Any]] = []
     for _ in range(BACKFILL_DAYS):
         if points:
-            price = simulate_step(price)
-        points.append({"date": d.isoformat(), "price": price})
+            price = max(MIN_PRICE, round(price * math.exp((DRIFT - 0.5 * VOL * VOL) + VOL * random.gauss(0, 1))))
+        points.append({"date": d.isoformat(), "price": int(price)})
         d += datetime.timedelta(days=1)
     random.setstate(state)
 
     data["history"] = points
-    # Initialize a first countdown
-    data.setdefault("meta", {})["next_shock_in"] = draw_next_interval()
+    meta["next_shock_in"] = draw_next_interval()
+    meta["bear_left"] = 0
+
+def simulate_step(prev_price: float, mu: float, sigma: float) -> int:
+    """
+    Mean-reverting GBM step:
+      log S_{t+1} - log S_t = (mu - 0.5*sigma^2 + k*(log A - log S_t)) + sigma*Z
+    """
+    z = random.gauss(0, 1)
+    gap = math.log(max(1e-9, ANCHOR)) - math.log(max(1e-9, prev_price))
+    drift_term = (mu - 0.5 * sigma * sigma) + REVERT_K * gap
+    step = math.exp(drift_term + sigma * z)
+    price = max(MIN_PRICE, round(prev_price * step))
+    return int(price)
+
+def apply_shock(price: int) -> (int, float):
+    pct = random.uniform(SHOCK_PCT_MIN, SHOCK_PCT_MAX)
+    sign = +1 if random.random() < SHOCK_UP_PROB else -1
+    new_price = int(max(MIN_PRICE, round(price * (1.0 + sign * pct))))
+    return new_price, sign * pct  # signed percent
 
 def ub_get(url: str) -> requests.Response:
     try:
@@ -242,11 +257,12 @@ def find_item_id_by_name() -> str:
         "Create it in the UB dashboard Store for this server first.")
     return ""
 
-def patch_item_price(item_id: str, new_price: int, date_str: str, shock_note: str) -> None:
+def patch_item_price(item_id: str, new_price: int, date_str: str, notes: List[str]) -> None:
     url = f"https://unbelievaboat.com/api/v1/guilds/{GUILD_ID}/items/{item_id}"
+    suffix = " • ".join(notes) if notes else ""
     desc = f"{ITEM_NAME} • {int(new_price)} chips • Updated {date_str} • Chart: {PAGES_URL}"
-    if shock_note:
-        desc = f"{desc} • ⚡ {shock_note}"
+    if suffix:
+        desc = f"{desc} • {suffix}"
     body = {"price": int(new_price), "description": desc}
     ub_patch(url, body)
 
@@ -259,37 +275,55 @@ def main() -> None:
     backfill_history(data)
 
     hist: List[Dict[str, Any]] = data["history"]
-    meta: Dict[str, Any] = data.setdefault("meta", {})
+    meta: Dict[str, Any] = data.setdefault("meta", {"next_shock_in": None, "bear_left": 0})
     if meta.get("next_shock_in") is None:
         meta["next_shock_in"] = draw_next_interval()
+    if "bear_left" not in meta:
+        meta["bear_left"] = 0
 
-    today = datetime.date.today().isoformat()
-    shock_note = ""
+    today = datetime.date.today()
+    today_str = today.isoformat()
+    notes: List[str] = []
 
-    # Base next price
-    if hist and hist[-1]["date"] == today:
-        price = int(round(float(hist[-1]["price"])))
+    # Choose regime params
+    if meta["bear_left"] > 0:
+        mu, sigma = BEAR_DRIFT, BEAR_VOL
+        meta["bear_left"] -= 1
+        notes.append("🐻 bear regime")
     else:
-        price = simulate_step(float(hist[-1]["price"]))
+        # chance to enter a new bear regime
+        if random.random() < BEAR_PROB:
+            meta["bear_left"] = random.randint(*BEAR_DAYS)
+            mu, sigma = BEAR_DRIFT, BEAR_VOL
+            notes.append("🐻 bear regime (new)")
+        else:
+            mu, sigma = DRIFT, VOL
 
-    # Shock logic
+    # Base move (mean-reverting)
+    if hist and hist[-1]["date"] == today_str:
+        price = int(hist[-1]["price"])
+    else:
+        price = simulate_step(float(hist[-1]["price"]), mu, sigma)
+
+    # Shock day?
     nsi = int(meta.get("next_shock_in", 0))
     if nsi <= 0:
-        # Apply a shock today
-        new_price, pct_signed, sign = apply_shock(price)
-        price = new_price
-        # Human readable note e.g., "+8.3%" or "−10.2%"
-        pct_display = f"{pct_signed*100:+.1f}%"
-        shock_note = f"Shock {pct_display}"
-        # Reset countdown
+        price, pct_signed = apply_shock(price)
+        notes.append(f"⚡ shock {pct_signed*100:+.1f}%")
         meta["next_shock_in"] = draw_next_interval()
     else:
-        # Countdown ticks
         meta["next_shock_in"] = nsi - 1
 
-    # Append today if not already recorded
-    if not hist or hist[-1]["date"] != today:
-        hist.append({"date": today, "price": int(price)})
+    # Weekly rebase / decay (holding cost) — Sunday by default
+    if today.weekday() == REBASE_DAY:
+        before = price
+        price = int(max(MIN_PRICE, round(price * (1 - REBASE_PCT))))
+        if price != before:
+            notes.append(f"⤵️ weekly rebase {-(REBASE_PCT*100):.1f}%")
+
+    # Append today's point if not already there
+    if not hist or hist[-1]["date"] != today_str:
+        hist.append({"date": today_str, "price": int(price)})
 
     save_history(data)
 
@@ -302,9 +336,8 @@ def main() -> None:
         item_id = find_item_id_by_name()
         print(f"[INFO] Found item id: {item_id}")
 
-    patch_item_price(item_id, int(price), today, shock_note)
-    print(f"OK • {ITEM_NAME} → {int(price)} chips ({today}) • {PAGES_URL} "
-          f"• next shock in {meta['next_shock_in']} day(s){' • ⚡' if shock_note else ''}")
+    patch_item_price(item_id, int(price), today_str, notes)
+    print(f"OK • {ITEM_NAME} → {int(price)} chips ({today_str}) • next shock in {meta['next_shock_in']} day(s) • notes: {', '.join(notes) if notes else '—'}")
 
 if __name__ == "__main__":
     main()
