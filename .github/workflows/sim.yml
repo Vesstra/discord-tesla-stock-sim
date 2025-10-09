@@ -3,7 +3,7 @@ name: Simulate & Update Tesla Stock
 on:
   schedule:
     # 23:00 UTC = 06:00 ICT (UTC+7)
-    - cron: "0 23 * * *"
+    - cron: '0 23 * * *'
   workflow_dispatch: {}
 
 jobs:
@@ -15,18 +15,21 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install deps
         run: pip install requests
+
+      # Optional debug step — keeps or removes as you like
       - name: Preflight: check UB guild access
         env:
           UNB_TOKEN: ${{ secrets.UNB_TOKEN }}
         run: |
           set -e
-          echo "Check app visibility on the guild…"
+          echo "Checking app visibility on the guild…"
           curl -sS -H "Authorization: $UNB_TOKEN" \
-            https://unbelievaboat.com/api/v1/applications/@me/guilds/1219525577950888036 | jq .
+            https://unbelievaboat.com/api/v1/applications/@me/guilds/1219525577950888036 \
+            | python -m json.tool
 
       - name: Simulate, publish, and PATCH UnbelievaBoat
         env:
